@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+test_output*/
+test_validate_output/
+test_benchmark_output/
+test_edge_cases/
+test_ollama_output/
+test_ollama_simulation/
+test_mock_output/
+
+# Model cache (downloaded at runtime)
+.cache/
+
+# Logs
+*.log

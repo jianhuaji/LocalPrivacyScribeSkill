@@ -1,0 +1,581 @@
+{
+  "skill_metadata": {
+    "name": "LocalPrivacyScribe",
+    "version": "1.0.0",
+    "display_name": "本地高密会议多模态督办官",
+    "description": "接收本地录音文件(.wav)和会议白板截图(.png)，利用本地离线工具提取内容，并交由端侧 LLM 大脑进行信息交叉验证，最终产出结构化纪要并自动生成本地 .ics 日程待办文件。所有计算均在本地完成，无需云端 API 调用，支持 OpenVINO 加速（NPU/GPU/CPU）。",
+    "author": "ModelScope Agent Ecosystem",
+    "author_email": "contact@modelscope.cn",
+    "homepage": "https://modelscope.cn",
+    "repository": "https://github.com/modelscope/modelscope-agent-skills",
+    "license": "Apache-2.0",
+    "tags": [
+      "meeting",
+      "transcription",
+      "ocr",
+      "multimodal",
+      "local",
+      "privacy",
+      "openvino",
+      "npu",
+      "ics",
+      "summary"
+    ],
+    "category": "productivity",
+    "language": ["zh", "en", "ja", "ko"],
+    "created_at": "2024-12-25T00:00:00Z",
+    "updated_at": "2024-12-25T00:00:00Z"
+  },
+  "skill_configuration": {
+    "entry_point": "local_privacy_scribe.skill.LocalPrivacyScribeSkill",
+    "class_name": "LocalPrivacyScribeSkill",
+    "framework": "modelscope-agent",
+    "runtime": "python",
+    "python_version": ">=3.8",
+    "execution_mode": "local",
+    "requires_gpu": false,
+    "requires_npu": false,
+    "offline_capable": true,
+    "network_access_required": false
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "audio_path": {
+        "type": "string",
+        "title": "音频文件路径",
+        "description": "本地会议录音文件的绝对路径或相对路径（.wav 格式）",
+        "format": "uri",
+        "pattern": ".*\\.wav$",
+        "minLength": 1,
+        "maxLength": 1024,
+        "examples": [
+          "/Users/jianhuaji/meetings/2024-12-25_morning.wav",
+          "./recordings/meeting_001.wav",
+          "C:\\meetings\\weekly_meeting.wav"
+        ],
+        "constraints": {
+          "file_format": ["wav"],
+          "encoding": "PCM",
+          "sample_rate": [8000, 16000, 44100, 48000],
+          "channels": [1, 2],
+          "bit_depth": 16,
+          "max_duration_minutes": 120,
+          "max_size_mb": 500
+        }
+      },
+      "image_path": {
+        "type": "string",
+        "title": "图片文件路径",
+        "description": "本地会议白板截图的绝对路径或相对路径（.png 或 .jpg 格式）",
+        "format": "uri",
+        "pattern": ".*\\.(png|jpg|jpeg)$",
+        "minLength": 1,
+        "maxLength": 1024,
+        "examples": [
+          "/Users/jianhuaji/meetings/whiteboard_001.png",
+          "./screenshots/whiteboard.png",
+          "C:\\meetings\\board_photo.jpg"
+        ],
+        "constraints": {
+          "file_format": ["png", "jpg", "jpeg"],
+          "color_mode": ["RGB", "RGBA"],
+          "min_resolution": {
+            "width": 640,
+            "height": 480
+          },
+          "recommended_resolution": {
+            "width": 1920,
+            "height": 1080
+          },
+          "max_size_mb": 10
+        }
+      }
+    },
+    "required": ["audio_path", "image_path"],
+    "additionalProperties": false
+  },
+  "optional_parameters": {
+    "type": "object",
+    "properties": {
+      "language": {
+        "type": "string",
+        "title": "音频语言",
+        "description": "音频语言代码，用于 ASR 识别优化",
+        "default": "auto",
+        "enum": ["auto", "zh", "en", "ja", "ko", "yue", "sh"],
+        "examples": ["zh", "en"]
+      },
+      "meeting_title": {
+        "type": "string",
+        "title": "会议标题",
+        "description": "会议标题，用于生成纪要文件名和 ICS 事件标题",
+        "minLength": 1,
+        "maxLength": 200,
+        "examples": ["Q4 产品规划会议", "周例会", "技术评审会"]
+      },
+      "meeting_date": {
+        "type": "string",
+        "title": "会议日期",
+        "description": "会议日期时间（ISO 8601 格式）",
+        "format": "date-time",
+        "examples": ["2024-12-25T14:30:00", "2024-12-25T09:00:00+08:00"]
+      },
+      "participants": {
+        "type": "array",
+        "title": "参会人员",
+        "description": "参会人员列表",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 0,
+        "maxItems": 50,
+        "examples": [
+          ["张三", "李四", "王五"],
+          ["Alice", "Bob", "Charlie"]
+        ]
+      },
+      "template": {
+        "type": "string",
+        "title": "Markdown 模板",
+        "description": "会议纪要 Markdown 输出模板类型",
+        "default": "default",
+        "enum": ["default", "minimal", "detailed"],
+        "examples": ["default", "detailed"]
+      },
+      "asr_device": {
+        "type": "string",
+        "title": "ASR 推理设备",
+        "description": "ASR 引擎使用的计算设备类型",
+        "default": "CPU",
+        "enum": ["NPU", "GPU", "CPU"],
+        "examples": ["NPU", "GPU"]
+      },
+      "ocr_device": {
+        "type": "string",
+        "title": "OCR 推理设备",
+        "description": "OCR 引擎使用的计算设备类型",
+        "default": "CPU",
+        "enum": ["NPU", "GPU", "CPU"],
+        "examples": ["NPU", "GPU"]
+      },
+      "output_dir": {
+        "type": "string",
+        "title": "输出目录",
+        "description": "生成文件（.ics, .md, .json）的保存目录",
+        "default": "./output",
+        "examples": ["./output", "./meetings/2024-12", "/tmp/meeting_output"]
+      },
+      "auto_generate_ics": {
+        "type": "boolean",
+        "title": "自动生成 ICS",
+        "description": "是否自动生成 .ics 日程文件",
+        "default": true
+      },
+      "auto_generate_markdown": {
+        "type": "boolean",
+        "title": "自动生成 Markdown",
+        "description": "是否自动生成 Markdown 会议纪要",
+        "default": true
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string",
+        "title": "处理状态",
+        "description": "Skill 执行状态",
+        "enum": ["success", "error"],
+        "readOnly": true
+      },
+      "audio_text": {
+        "type": "string",
+        "title": "音频转录文本",
+        "description": "ASR 引擎从音频文件中提取的完整文本内容",
+        "readOnly": true
+      },
+      "image_text": {
+        "type": "string",
+        "title": "图片识别文本",
+        "description": "OCR 引擎从图片中提取的完整文本内容",
+        "readOnly": true
+      },
+      "audio_confidence": {
+        "type": "number",
+        "title": "音频识别置信度",
+        "description": "ASR 识别的平均置信度（0.0-1.0）",
+        "minimum": 0,
+        "maximum": 1,
+        "readOnly": true
+      },
+      "image_confidence": {
+        "type": "number",
+        "title": "图片识别置信度",
+        "description": "OCR 识别的平均置信度（0.0-1.0）",
+        "minimum": 0,
+        "maximum": 1,
+        "readOnly": true
+      },
+      "audio_duration": {
+        "type": "number",
+        "title": "音频时长",
+        "description": "音频文件的总时长（秒）",
+        "minimum": 0,
+        "readOnly": true
+      },
+      "meeting_summary": {
+        "type": "object",
+        "title": "会议纪要",
+        "description": "结构化的会议纪要数据",
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "会议标题"
+          },
+          "date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "会议日期"
+          },
+          "duration": {
+            "type": "number",
+            "title": "会议时长（分钟）"
+          },
+          "participants": {
+            "type": "array",
+            "title": "参会人员",
+            "items": {
+              "type": "string"
+            }
+          },
+          "key_points": {
+            "type": "array",
+            "title": "关键要点",
+            "items": {
+              "type": "string"
+            }
+          },
+          "decisions": {
+            "type": "array",
+            "title": "决策事项",
+            "items": {
+              "type": "string"
+            }
+          },
+          "action_items": {
+            "type": "array",
+            "title": "待办事项",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "title": "任务 ID"
+                },
+                "description": {
+                  "type": "string",
+                  "title": "任务描述"
+                },
+                "assignee": {
+                  "type": "string",
+                  "title": "负责人"
+                },
+                "deadline": {
+                  "type": "string",
+                  "format": "date",
+                  "title": "截止日期"
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": ["high", "medium", "low"],
+                  "title": "优先级"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["pending", "in_progress", "completed"],
+                  "title": "状态"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": ["audio", "image"],
+                  "title": "来源"
+                }
+              }
+            }
+          },
+          "audio_transcript": {
+            "type": "string",
+            "title": "音频完整转录"
+          },
+          "whiteboard_content": {
+            "type": "string",
+            "title": "白板完整内容"
+          }
+        },
+        "readOnly": true
+      },
+      "output_files": {
+        "type": "object",
+        "title": "输出文件",
+        "description": "生成的文件路径",
+        "properties": {
+          "ics": {
+            "type": "string",
+            "format": "uri",
+            "title": "ICS 日程文件路径"
+          },
+          "markdown": {
+            "type": "string",
+            "format": "uri",
+            "title": "Markdown 纪要路径"
+          },
+          "json": {
+            "type": "string",
+            "format": "uri",
+            "title": "JSON 数据文件路径"
+          }
+        },
+        "readOnly": true
+      },
+      "metadata": {
+        "type": "object",
+        "title": "元数据",
+        "description": "处理过程的元数据信息",
+        "properties": {
+          "asr_device": {
+            "type": "string",
+            "title": "ASR 设备"
+          },
+          "ocr_device": {
+            "type": "string",
+            "title": "OCR 设备"
+          },
+          "processing_time": {
+            "type": "number",
+            "title": "处理耗时（秒）"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "处理时间戳"
+          },
+          "output_directory": {
+            "type": "string",
+            "format": "uri",
+            "title": "输出目录"
+          }
+        },
+        "readOnly": true
+      },
+      "error_type": {
+        "type": "string",
+        "title": "错误类型",
+        "readOnly": true
+      },
+      "error_message": {
+        "type": "string",
+        "title": "错误信息",
+        "readOnly": true
+      }
+    }
+  },
+  "device_support": {
+    "npu": {
+      "supported": true,
+      "description": "Intel 神经网络处理器（NPU），推荐用于边缘设备",
+      "driver_required": "OpenVINO NPU Driver",
+      "setup_guide": "https://docs.openvino.ai/latest/openvino_docs_install_guides_overview.html"
+    },
+    "gpu": {
+      "supported": true,
+      "description": "集成或独立显卡（Intel GPU / NVIDIA GPU）",
+      "driver_required": "OpenVINO GPU Plugin",
+      "setup_guide": "https://docs.openvino.ai/latest/openvino_docs_install_guides_overview.html"
+    },
+    "cpu": {
+      "supported": true,
+      "description": "中央处理器（CPU），兼容性最好的回退方案",
+      "driver_required": "None",
+      "setup_guide": null
+    }
+  },
+  "model_configuration": {
+    "asr": {
+      "model_name": "SenseVoiceSmall",
+      "model_source": "iic/SenseVoiceSmall",
+      "framework": "openvino",
+      "format": "IR",
+      "device_preference": ["NPU", "GPU", "CPU"],
+      "model_path": "~/.cache/modelscope/LocalPrivacyScribe/sensevoice_openvino.xml",
+      "languages": ["zh", "en", "ja", "ko", "yue", "sh"],
+      "sample_rate": 16000
+    },
+    "ocr": {
+      "model_name": "RapidOCR",
+      "model_source": "rapidocr",
+      "framework": "openvino",
+      "format": "IR",
+      "device_preference": ["NPU", "GPU", "CPU"],
+      "model_path": "~/.cache/modelscope/LocalPrivacyScribe/rapidocr/",
+      "model_files": ["det.xml", "det.bin", "rec.xml", "rec.bin"],
+      "languages": ["zh", "en", "ja", "ko", "fr", "de", "ru"],
+      "input_size": [640, 640]
+    }
+  },
+  "examples": [
+    {
+      "title": "基础使用示例",
+      "description": "使用默认配置（CPU）处理会议录音和白板截图",
+      "code": "from local_privacy_scribe import LocalPrivacyScribeSkill\n\n# 初始化 Skill\nskill = LocalPrivacyScribeSkill()\n\n# 执行处理\nresult = skill._local_call(\n    audio_path=\"./meeting.wav\",\n    image_path=\"./whiteboard.png\"\n)\n\n# 查看结果\nif result['status'] == 'success':\n    print(f\"音频文本: {result['audio_text'][:100]}...\")\n    print(f\"图片文本: {result['image_text'][:100]}...\")\n    print(f\"输出目录: {result['metadata']['output_directory']}\")"
+    },
+    {
+      "title": "NPU 加速示例",
+      "description": "使用 Intel NPU 加速 ASR 和 OCR 推理",
+      "code": "from local_privacy_scribe import LocalPrivacyScribeSkill\n\n# 使用 NPU 加速（推荐）\nskill = LocalPrivacyScribeSkill(\n    asr_device=\"NPU\",\n    ocr_device=\"NPU\",\n    output_dir=\"./output_npu\"\n)\n\nresult = skill._local_call(\n    audio_path=\"./meeting.wav\",\n    image_path=\"./whiteboard.png\",\n    meeting_title=\"Q4 产品规划会议\",\n    participants=[\"张三\", \"李四\", \"王五\"]\n)"
+    },
+    {
+      "title": "GPU 加速示例",
+      "description": "使用 GPU 加速以获得最佳性能",
+      "code": "from local_privacy_scribe import LocalPrivacyScribeSkill\n\n# 使用 GPU 加速（性能最强）\nskill = LocalPrivacyScribeSkill(\n    asr_device=\"GPU\",\n    ocr_device=\"GPU\",\n    asr_config={\n        \"PERFORMANCE_HINT\": \"LATENCY\",\n        \"NUM_STREAMS\": \"1\"\n    },\n    ocr_config={\n        \"PERFORMANCE_HINT\": \"THROUGHPUT\",\n        \"NUM_STREAMS\": \"4\"\n    }\n)\n\nresult = skill._local_call(\n    audio_path=\"./long_meeting.wav\",\n    image_path=\"./whiteboard.png\"\n)"
+    },
+    {
+      "title": "自定义输出示例",
+      "description": "自定义输出目录和模板",
+      "code": "from local_privacy_scribe import LocalPrivacyScribeSkill\n\nskill = LocalPrivacyScribeSkill(\n    output_dir=\"./custom_output\",\n    auto_generate_ics=True,\n    auto_generate_markdown=True\n)\n\nresult = skill._local_call(\n    audio_path=\"./meeting.wav\",\n    image_path=\"./whiteboard.png\",\n    template=\"detailed\",\n    language=\"zh\"\n)\n\n# 访问生成的文件\nics_path = result['output_files']['ics']\nmd_path = result['output_files']['markdown']\njson_path = result['output_files']['json']"
+    }
+  ],
+  "error_handling": {
+    "file_not_found": {
+      "error_code": "FILE_NOT_FOUND",
+      "http_status": 404,
+      "user_message": "指定的音频或图片文件不存在，请检查文件路径是否正确。",
+      "technical_message": "FileNotFoundError: 文件路径不存在或无法访问"
+    },
+    "invalid_format": {
+      "error_code": "INVALID_FORMAT",
+      "http_status": 400,
+      "user_message": "文件格式不支持，请使用 .wav 格式的音频文件和 .png/.jpg 格式的图片文件。",
+      "technical_message": "ValueError: 不支持的文件格式"
+    },
+    "inference_error": {
+      "error_code": "INFERENCE_ERROR",
+      "http_status": 500,
+      "user_message": "模型推理过程出错，请检查 OpenVINO 环境配置和设备可用性。",
+      "technical_message": "RuntimeError: ASR/OCR 推理失败"
+    },
+    "model_load_error": {
+      "error_code": "MODEL_LOAD_ERROR",
+      "http_status": 500,
+      "user_message": "模型文件加载失败，请确保已下载并转换 OpenVINO IR 格式的模型文件。",
+      "technical_message": "RuntimeError: 模型文件缺失或损坏"
+    }
+  },
+  "dependencies": {
+    "required": [
+      {
+        "name": "openvino",
+        "version": ">=2024.0.0",
+        "description": "OpenVINO 推理框架"
+      },
+      {
+        "name": "modelscope-agent",
+        "version": ">=0.5.0",
+        "description": "ModelScope Agent 框架"
+      },
+      {
+        "name": "rapidocr_openvino",
+        "version": ">=1.3.0",
+        "description": "RapidOCR OpenVINO 加速版本"
+      }
+    ],
+    "optional": [
+      {
+        "name": "optimum[openvino]",
+        "version": ">=1.16.0",
+        "description": "OpenVINO 优化扩展"
+      },
+      {
+        "name": "librosa",
+        "version": ">=0.10.0",
+        "description": "音频处理库"
+      },
+      {
+        "name": "soundfile",
+        "version": ">=0.12.0",
+        "description": "音频文件读写"
+      },
+      {
+        "name": "opencv-python",
+        "version": ">=4.8.0",
+        "description": "图像处理库"
+      }
+    ]
+  },
+  "compatibility": {
+    "modelscope_agent_version": ">=0.5.0",
+    "openvino_version": ">=2024.0.0",
+    "python_version": ">=3.8",
+    "operating_systems": ["Windows", "Linux", "macOS"],
+    "tested_devices": [
+      {
+        "device": "Intel Core i7-12700H",
+        "type": "CPU",
+        "os": "Windows 11",
+        "status": "tested"
+      },
+      {
+        "device": "Intel Core Ultra 7 155H",
+        "type": "NPU",
+        "os": "Windows 11",
+        "status": "tested"
+      },
+      {
+        "device": "Intel Arc iGPU",
+        "type": "GPU",
+        "os": "Ubuntu 22.04",
+        "status": "tested"
+      }
+    ]
+  },
+  "registration_info": {
+    "skill_center_url": "https://modelscope.cn/skills",
+    "registration_required": true,
+    "validation_required": true,
+    "public": true,
+    "featured": false,
+    "verified": false,
+    "download_count": 0,
+    "rating": 0.0,
+    "review_count": 0
+  },
+  "changelog": {
+    "1.0.0": {
+      "date": "2024-12-25",
+      "changes": [
+        "初始版本发布",
+        "支持 ASR（SenseVoice）和 OCR（RapidOCR）多模态提取",
+        "支持 OpenVINO 异构设备调度（NPU/GPU/CPU）",
+        "自动生成 Markdown 会议纪要",
+        "自动生成 ICS 日程文件",
+        "自动生成 JSON 结构化数据",
+        "完整的错误处理和日志记录",
+        "符合 ModelScope Skills 中心规范"
+      ]
+    }
+  },
+  "documentation": {
+    "readme": "README.md",
+    "api_docs": "docs/api.md",
+    "examples": "docs/examples.md",
+    "troubleshooting": "docs/troubleshooting.md",
+    "changelog": "CHANGELOG.md"
+  },
+  "contact": {
+    "issues": "https://github.com/modelscope/modelscope-agent-skills/issues",
+    "discussions": "https://github.com/modelscope/modelscope-agent-skills/discussions",
+    "email": "contact@modelscope.cn",
+    "wechat": "modelscope"
+  }
+}
