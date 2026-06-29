@@ -476,8 +476,8 @@ ocr_config = {
 
 - **Issues**: [GitHub Issues](https://github.com/modelscope/modelscope-agent-skills/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/modelscope/modelscope-agent-skills/discussions)
-- **Email**: contact@modelscope.cn
-- **微信**: modelscope
+- **Email**: cheehwa@msn.com
+- **微信**: a057195168
 
 ---
 
